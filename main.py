@@ -180,6 +180,11 @@ def process_dataframe(df: pd.DataFrame, only_verified: bool, sleep_min: float, s
 
 app = FastAPI(title="Bulk Email Verifier API")
 
+# Health check route for Railway
+@app.get("/")
+def health():
+    return {"status": "ok", "message": "FastAPI Email Verifier is running!"}
+
 @app.post("/verify-emails/")
 async def verify_emails(
     file: UploadFile = File(...),
