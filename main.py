@@ -213,3 +213,8 @@ async def verify_emails(
 
     return FileResponse(out_csv_path, filename="output_verified.csv")
 
+# ----------------- Run App (Railway compatible) -----------------
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
