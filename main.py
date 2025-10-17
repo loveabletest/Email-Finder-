@@ -1,11 +1,11 @@
 # main.py
-import csv, re, tempfile, os
+import csv, re, os, tempfile
 from typing import Optional
 import pandas as pd
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import FileResponse, JSONResponse
 
-# Optional package detection
+# Optional email validator
 try:
     from email_validator import validate_email
     EMAIL_VALIDATOR_AVAILABLE = True
@@ -13,26 +13,25 @@ except:
     EMAIL_VALIDATOR_AVAILABLE = False
 
 # ----------------- Helpers -----------------
-def simple_syntax_check(email: str) -> bool:
-    pattern = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
-    return re.match(pattern, email) is not None
-
-def verify_email_status(email: str) -> str:
-    """Quick verification: only syntax check for Railway-friendly deployment"""
-    if EMAIL_VALIDATOR_AVAILABLE:
-        try:
-            validate_email(email)
-            return "syntax_ok"
-        except:
-            return "invalid_syntax"
-    else:
-        return "syntax_ok" if simple_syntax_check(email) else "invalid_syntax"
-
 def clean_domain(domain: str) -> str:
     d = (domain or "").lower().strip()
     d = re.sub(r'^https?://', '', d)
     d = re.sub(r'^www\.', '', d)
     return d.strip().rstrip('/')
+
+def simple_syntax_check(email: str) -> bool:
+    pattern = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+    return re.match(pattern, email) is not None
+
+def verify_email_status(email: str) -> str:
+    if EMAIL_VALIDATOR_AVAILABLE:
+        try:
+            validate_email(email)
+            return "valid_syntax"
+        except:
+            return "invalid_syntax"
+    else:
+        return "valid_syntax" if simple_syntax_check(email) else "invalid_syntax"
 
 def generate_candidate_emails(first: str, last: str, domain: str):
     f = (first or "").lower().strip()
@@ -46,24 +45,17 @@ def generate_candidate_emails(first: str, last: str, domain: str):
         f"{f}{l0}@{domain}", f"{f0}{l0}@{domain}"
     ]
     seen = set()
-    out = []
-    for p in patterns:
-        if p and p not in seen and "@" in p and not p.startswith("@"):
-            seen.add(p)
-            out.append(p)
-    return out
+    return [p for p in patterns if p and p not in seen and "@" in p and not p.startswith("@")]
 
 # ----------------- Processing -----------------
 def process_dataframe(df: pd.DataFrame, only_verified: bool, max_candidates_per_row: int):
     rows_out = []
     headers = list(df.columns)
-    lower_headers = [str(h) for h in headers]
     expected = {'first', 'last', 'company_website'}
-    if not expected.issubset(set(lower_headers)):
+    if not expected.issubset(set([h.lower() for h in headers])):
         raise ValueError("Input CSV must contain headers: first,last,company_website")
-    total = len(df)
 
-    for i, r in enumerate(df.itertuples(index=False), start=1):
+    for r in df.itertuples(index=False):
         row = {str(h): getattr(r, h) if hasattr(r, h) else r[idx] for idx, h in enumerate(headers)}
         first = str(row.get('first', '') or '').strip()
         last = str(row.get('last', '') or '').strip()
@@ -76,7 +68,7 @@ def process_dataframe(df: pd.DataFrame, only_verified: bool, max_candidates_per_
             candidates = generate_candidate_emails(first, last, domain)[:max_candidates_per_row]
             for c in candidates:
                 status = verify_email_status(c)
-                if status == 'syntax_ok':
+                if status == 'valid_syntax':
                     verified_email = c
                     verification_status = status
                     break
@@ -93,13 +85,12 @@ def process_dataframe(df: pd.DataFrame, only_verified: bool, max_candidates_per_
         else:
             rows_out.append(out_row)
 
-    out_df = pd.DataFrame(rows_out)
-    return out_df
+    return pd.DataFrame(rows_out)
 
 # ----------------- FastAPI -----------------
 app = FastAPI(title="Bulk Email Verifier API")
 
-# Health check route for Railway
+# Health check
 @app.get("/")
 def health():
     return {"status": "ok", "message": "FastAPI Email Verifier is running!"}
@@ -108,7 +99,7 @@ def health():
 async def verify_emails(
     file: UploadFile = File(...),
     only_verified: bool = Form(False),
-    max_candidates_per_row: int = Form(10),
+    max_candidates_per_row: int = Form(10)
 ):
     if not file.filename.endswith(".csv"):
         return JSONResponse({"error": "Please upload a CSV file."}, status_code=400)
@@ -119,7 +110,7 @@ async def verify_emails(
         return JSONResponse({"error": f"Failed to read CSV: {e}"}, status_code=400)
 
     try:
-        out_df = process_dataframe(df, only_verified=only_verified, max_candidates_per_row=max_candidates_per_row)
+        out_df = process_dataframe(df, only_verified, max_candidates_per_row)
     except Exception as e:
         return JSONResponse({"error": f"Processing error: {e}"}, status_code=500)
 
@@ -129,7 +120,7 @@ async def verify_emails(
 
     return FileResponse(out_csv_path, filename="output_verified.csv")
 
-# ----------------- Run App (Railway compatible) -----------------
+# ----------------- Run (Railway compatible) -----------------
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
