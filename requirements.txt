@@ -1,6 +1,7 @@
 fastapi
-uvicorn
+uvicorn[standard]
 pandas
+python-multipart
 dnspython
 email-validator
-python-multipart
+python-dotenv
