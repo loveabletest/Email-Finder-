@@ -1,45 +1,27 @@
-import os
-import uuid
+# main.py
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
+from app.routes.verifier import router as verifier_router
+import uvicorn
 
+app = FastAPI(title="Email Verifier API", version="1.0")
 
-load_dotenv()
-
-
-app = FastAPI(title="Email Verifier Backend")
-
-
-# CORS - allow from env or default to * (for quick deploy). In production, lock this down.
-origins = os.getenv("CORS_ORIGINS", "*")
-if origins == "*":
-allow_origins = ["*"]
-else:
-allow_origins = [o.strip() for o in origins.split(",")]
-
-
+# Enable CORS for frontend clients
 app.add_middleware(
-CORSMiddleware,
-allow_origins=allow_origins,
-allow_credentials=True,
-allow_methods=["*"],
-allow_headers=["*"],
+    CORSMiddleware,
+    allow_origins=["*"],  # adjust for production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-
-# simple in-memory store for runs (for logs/downloads). For prod use a persistent store like S3/DB.
-app.state.runs = {}
-
-
-# include routes
-from app.routes import verifier # noqa: E402, F401
-app.include_router(verifier.router)
-
-
-
+# Routers
+app.include_router(verifier_router, prefix="/api")
 
 @app.get("/health")
-async def health():
-"""Basic health check."""
-return {"status": "ok", "run_id": str(uuid.uuid4())}
+def health_check():
+    """Health check endpoint."""
+    return {"status": "ok", "message": "Server running"}
+
+if __name__ == "__main__":
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
