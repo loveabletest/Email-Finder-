@@ -1,62 +1,57 @@
-import io
-df,
-only_verified=only_verified,
-sleep_min=sleep_min,
-sleep_max=sleep_max,
-max_candidates_per_row=max_candidates,
-)
+# app/routes/verifier.py
+from fastapi import APIRouter, UploadFile, File, Form
+from fastapi.responses import JSONResponse
+from app.services.verify_logic import run_verification_service
+import tempfile
+import os
+import base64
 
+router = APIRouter(prefix="/verify", tags=["Email Verification"])
 
-# save to temp file
-run_id = str(uuid.uuid4())
-tmp_dir = tempfile.mkdtemp(prefix=f"email_verifier_{run_id}_")
-out_path = os.path.join(tmp_dir, "output_verified.csv")
-out_df.to_csv(out_path, index=False)
+@router.post("/")
+async def verify_csv(
+    uploaded_file: UploadFile = File(...),
+    only_verified: bool = Form(False),
+    sleep_min: float = Form(0.4),
+    sleep_max: float = Form(1.2),
+    max_candidates: int = Form(10),
+    preview_rows: int = Form(10)
+):
+    """
+    Upload a CSV and run bulk email verification.
+    Returns JSON results + downloadable base64 CSV.
+    """
+    try:
+        # Save uploaded CSV temporarily
+        tmp_dir = tempfile.mkdtemp()
+        tmp_input_path = os.path.join(tmp_dir, uploaded_file.filename)
+        with open(tmp_input_path, "wb") as f:
+            f.write(await uploaded_file.read())
 
+        # Run verification logic
+        out_df, logs, out_csv_path = run_verification_service(
+            tmp_input_path,
+            only_verified,
+            sleep_min,
+            sleep_max,
+            max_candidates,
+            preview_rows
+        )
 
-# base64 encode
-with open(out_path, 'rb') as f:
-b64 = base64.b64encode(f.read()).decode('utf-8')
+        # Encode output CSV in base64 for API download
+        with open(out_csv_path, "rb") as f:
+            csv_base64 = base64.b64encode(f.read()).decode("utf-8")
 
+        return JSONResponse({
+            "status": "success",
+            "rows_processed": len(out_df),
+            "sample_preview": out_df.head(preview_rows).to_dict(orient="records"),
+            "download_base64": csv_base64,
+            "logs": logs[-10:]  # last few logs
+        })
 
-# store minimal run info in app state -- ephemeral
-# NOTE: In production use external storage (S3, DB) and do not store large data in memory.
-router_state = getattr(router, "state", None)
-# store in FastAPI app state through a global import of current_app is possible; here we rely on uvicorn single-process default
-# Instead we return run_id and file path; users may download via /download/{run_id}
-
-
-# Return preview (first N rows) as list of dicts
-preview_df = out_df.head(preview_rows)
-preview = preview_df.fillna("").to_dict(orient="records")
-
-
-return {
-"run_id": run_id,
-"preview": preview,
-"rows_processed": len(out_df),
-"verification_file_base64": b64,
-"download_path": out_path,
-}
-
-
-
-
-@router.get("/download")
-async def download_file(path: str):
-"""Download a generated CSV by providing the path returned in /verify response.
-This is a convenience endpoint for deployments where returning a base64 blob is not convenient.
-In production you'd return a signed URL from S3 or similar instead of exposing local paths.
-"""
-if not os.path.exists(path):
-raise HTTPException(status_code=404, detail="File not found")
-return FileResponse(path, filename=os.path.basename(path), media_type='text/csv')
-
-
-
-
-# Optional endpoint to fetch logs - in this implementation we return logs collected during processing if provided.
-@router.post("/logs")
-async def get_logs(dummy: Optional[bool] = Form(False)):
-# Placeholder - process_dataframe returns logs but we currently return them in verify JSON if you wish.
-return {"logs": "Logs are included in the verify response (if needed). For persistent logs add a DB or logging sink."}
+    except Exception as e:
+        return JSONResponse({
+            "status": "error",
+            "message": str(e)
+        }, status_code=500)
